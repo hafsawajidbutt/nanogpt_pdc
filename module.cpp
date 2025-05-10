@@ -285,7 +285,7 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
 torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, torch::Tensor VTensor, torch::Tensor temp,
     int B, int H, int N, int d)
 {
-
+    //code for fused attention
     at::Tensor OTensor = at::zeros({B, H, N, d}, at::kFloat);
     std::vector<float> O = formatTensor(OTensor);
     std::vector<float> Q = formatTensor(QTensor);
