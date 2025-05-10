@@ -283,48 +283,68 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
 // ---------------------------------------------------------- //
 
 torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, torch::Tensor VTensor, torch::Tensor temp,
-                int B, int H, int N, int d){
+    int B, int H, int N, int d)
+{
 
-    // Q, K, V are passed in with Shape: (B, H, N, d)
-
-    //Make O Tensor with Shape (B, H, N, d)
-    //and O Row Tensor with Shape (N)
     at::Tensor OTensor = at::zeros({B, H, N, d}, at::kFloat);
-    at::Tensor ORowTensor = at::zeros({N}, at::kFloat);
-
-    //Format Y, Q, K, and V tensors into 4D vectors
     std::vector<float> O = formatTensor(OTensor);
     std::vector<float> Q = formatTensor(QTensor);
     std::vector<float> K = formatTensor(KTensor);
     std::vector<float> V = formatTensor(VTensor);
-    
-    //Format ORow Tensor into a 1D vector
-    // You can simply access this as ORow[i]
-    std::vector<float> ORow = formatTensor(ORowTensor);
 
-
-    // -------- YOUR CODE HERE  -------- //
-    // We give you a template of the first three loops for your convenience
-    //loop over batch
-    for (int b = 0; b < B; b++){
-
-        //loop over heads
-        for (int h = 0; h < H; h++){
-            for (int i = 0; i < N ; i++){
-
-		// YRow is moved inside so each OpenMP thread gets a local copy.
+    // Outer loops — parallelize across (b, h, i)
+    #pragma omp parallel for collapse(3)
+    for (int b = 0; b < B; b++) 
+    {
+        for (int h = 0; h < H; h++) 
+        {
+            for (int i = 0; i < N; i++) 
+            {
+                // Each thread gets its own row buffer
                 at::Tensor ORowTensor = temp.index({torch::indexing::Slice(omp_get_thread_num(), torch::indexing::None)});      
                 std::vector<float> ORow = formatTensor(ORowTensor);
-		//YOUR CODE HERE
+
+                // Step 1: Q[i] ⋅ K^T (row i of QK^T)
+                float row_sum = 0.0f;
+                for (int j = 0; j < N; j++) 
+                {
+                    float dot = 0.0f;
+                    for (int k = 0; k < d; k++) 
+                    {
+                        float q = fourDimRead(Q, b, h, i, k, H, N, d);
+                        float kk = fourDimRead(K, b, h, j, k, H, N, d);
+                        dot += q * kk;
+                    }
+                    float softmax_val = std::exp(dot);
+                    ORow[j] = softmax_val;
+                    row_sum += softmax_val;
+                }
+
+                // Step 2: Normalize softmax
+                for (int j = 0; j < N; j++) 
+                {
+                ORow[j] /= row_sum;
+                }
+
+                // Step 3: O[i] = softmax(row) × V
+                for (int k = 0; k < d; k++) 
+                {
+                    float sum = 0.0f;
+                    for (int j = 0; j < N; j++) 
+                    {
+                        float p = ORow[j]; // softmax weight
+                        float v = fourDimRead(V, b, h, j, k, H, N, d);
+                        sum += p * v;
+                    }
+                    fourDimWrite(O, b, h, i, k, H, N, d, sum);
+                }
             }
-	}
+        }
     }
-	    
-	
-    // DO NOT EDIT THIS RETURN STATEMENT //
-    // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
+
     return torch::from_blob(O.data(), {B, H, N, d}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
 }
+
 
 
 // ---------------------------------------------------------- //
