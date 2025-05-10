@@ -194,7 +194,8 @@ torch::Tensor myNaiveAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
 // ---------------------------------------------------------- //
 
 torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTensor, torch::Tensor VTensor, torch::Tensor QK_tTensor,
-                int B, int H, int N, int d){
+                int B, int H, int N, int d)
+{
     
     // Q, K, V are passed in with Shape: (B, H, N, d)
     //QK^t Intermediate Tensor has Shape (N, N)
@@ -212,7 +213,65 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
     std::vector<float> QK_t = formatTensor(QK_tTensor);
 
     // -------- YOUR CODE HERE  -------- //
-
+    // loop over batches
+    for (int b = 0; b < B; b++) 
+    {
+        // loop over heads
+        for (int h = 0; h < H; h++) 
+        {
+                
+            // Step 1: Q * K^T
+            for (int i = 0; i < N; i++) 
+            {
+                for (int j = 0; j < N; j++) 
+                {
+                    float sum = 0.0f;
+                    for (int k = 0; k < d; k++) 
+                    {
+                        float q_val = fourDimRead(Q, b, h, i, k, H, N, d);
+                        float k_val = fourDimRead(K, b, h, j, k, H, N, d); // no transpose needed
+                        sum += q_val * k_val;
+                    }
+                    twoDimWrite(QK_t, i, j, N, sum);
+                }
+            }
+    
+            // Step 2: Softmax row-wise on QK_t
+            for (int i = 0; i < N; i++) 
+            {
+                float row_sum = 0.0f;
+                for (int j = 0; j < N; j++) 
+                {
+                    float val = twoDimRead(QK_t, i, j, N);
+                    val = std::exp(val);
+                    twoDimWrite(QK_t, i, j, N, val); // overwrite with exp(val)
+                    row_sum += val;
+                }
+                for (int j = 0; j < N; j++) 
+                {
+                    float val = twoDimRead(QK_t, i, j, N);
+                    val /= row_sum;
+                    twoDimWrite(QK_t, i, j, N, val); // overwrite with softmax val
+                }
+            }
+    
+            // Step 3: Output = softmax(QK^T) * V
+            for (int i = 0; i < N; i++) 
+            {
+                for (int k = 0; k < d; k++) 
+                {
+                    float sum = 0.0f;
+                    for (int j = 0; j < N; j++) 
+                    {
+                        float attn_weight = twoDimRead(QK_t, i, j, N);
+                        float v_val = fourDimRead(V, b, h, j, k, H, N, d);
+                        sum += attn_weight * v_val;
+                    }
+                    fourDimWrite(O, b, h, i, k, H, N, d, sum);
+                }
+            }
+        }
+    }
     // DO NOT EDIT THIS RETURN STATEMENT //
     // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
     return torch::from_blob(O.data(), {B, H, N, d}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
